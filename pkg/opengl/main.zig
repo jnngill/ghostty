@@ -13,6 +13,7 @@
 pub const c = @import("opengl_c");
 pub const glad = @import("glad.zig");
 pub const egl = @import("egl.zig");
+pub const wgl = @import("wgl.zig");
 pub const ext = @import("extensions.zig");
 pub const Buffer = @import("Buffer.zig");
 pub const Framebuffer = @import("Framebuffer.zig");

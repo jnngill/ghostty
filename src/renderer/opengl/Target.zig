@@ -218,6 +218,37 @@ pub fn exportDmabuf(
     };
 }
 
+/// Copy the rendered frame into the default framebuffer of the current
+/// context, i.e. the window's back buffer. Used on platforms (Windows)
+/// where we own the window and present to it directly.
+pub fn blitToDefaultFramebuffer(self: *const Self) !void {
+    // See exportDmabuf: the stored values are already sRGB-encoded and
+    // must be copied verbatim.
+    try gl.disable(gl.c.GL_FRAMEBUFFER_SRGB);
+    defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
+        log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+    };
+
+    const read_bind = try self.framebuffer.bind(.read);
+    defer read_bind.unbind();
+
+    // Both our texture and the default framebuffer are +Y up,
+    // so no flip is necessary.
+    gl.glad.context.BindFramebuffer.?(gl.c.GL_DRAW_FRAMEBUFFER, 0);
+    try gl.blitFramebuffer(
+        0,
+        0,
+        @intCast(self.width),
+        @intCast(self.height),
+        0,
+        0,
+        @intCast(self.width),
+        @intCast(self.height),
+        .{ .color_buffer_bit = true },
+        .nearest,
+    );
+}
+
 /// Read the current contents of the framebuffer into CPU memory.
 ///
 /// This is used by the CPU readback presentation fallback. The

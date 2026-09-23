@@ -67,9 +67,12 @@ comptime {
     //   3. Weak COFF builds fatally error because MSVC's linker
     //      errors when two identical linked symbols exist. MSVC has
     //      CRT which links so we don't need this there anyways.
+    //   4. Likewise, any MSVC ABI build links vcruntime's (already
+    //      vectorized) strong memset, which would be a duplicate symbol.
     const enabled =
         std.simd.suggestVectorLength(u8) != null and
         builtin.object_format != .c and
+        builtin.abi != .msvc and
         !(linkage == .weak and builtin.object_format == .coff);
 
     if (enabled) @export(&memset, .{

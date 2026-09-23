@@ -74,13 +74,15 @@ pub fn complete(self: *const Self, sync: bool) void {
     // Sync after frame draw AND frame present GL calls.
     gl.finish();
 
-    // At this point the ExportedFrame is finished and can be shared
-    if (presented_frame) |frame| {
+    // At this point the ExportedFrame is finished and can be shared.
+    // Frames that aren't exported (ExportedFrame == void) were already
+    // presented directly by the API, so the apprt has nothing to do.
+    if (comptime OpenGL.ExportedFrame != void) if (presented_frame) |frame| {
         self.renderer.pushFrame(frame);
 
         // Notify the surface that it should redraw
         _ = self.renderer.surface_mailbox.push(.redraw, .{ .forever = {} });
-    }
+    };
 
     // Report the health to the renderer.
     self.renderer.frameCompleted(health);

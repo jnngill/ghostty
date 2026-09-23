@@ -2,6 +2,7 @@
 pub const OpenGL = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const gl = @import("opengl");
 const egl = gl.egl;
@@ -43,10 +44,19 @@ alloc: std.mem.Allocator,
 /// Alpha blending mode
 blending: configpkg.Config.AlphaBlending,
 
-egl_display: *gl.egl.Display,
-egl_context: *gl.egl.Context,
+/// The platform GL context. On Windows this is a WGL context bound to
+/// the surface's window, which we present to directly. Everywhere else
+/// this is a surfaceless EGL context whose frames are exported to the apprt.
+context: Context,
+
+const Context = if (builtin.os.tag == .windows) gl.wgl.Context else struct {
+    display: *egl.Display,
+    context: *egl.Context,
+};
 
 pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
+    if (comptime builtin.os.tag == .windows) return initWgl(alloc, opts);
+
     try egl.load();
 
     const display: *egl.Display = try .init(egl.c.EGL_DEFAULT_DISPLAY);
@@ -97,14 +107,37 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
     return .{
         .alloc = alloc,
         .blending = opts.config.blending,
-        .egl_display = display,
-        .egl_context = context,
+        .context = .{ .display = display, .context = context },
+    };
+}
+
+fn initWgl(alloc: Allocator, opts: rendererpkg.Options) !OpenGL {
+    const hwnd: gl.wgl.HWND = @ptrCast(opts.rt_surface.win32Hwnd());
+    const context = gl.wgl.Context.create(
+        hwnd,
+        MIN_VERSION_MAJOR,
+        MIN_VERSION_MINOR,
+    ) catch |err| {
+        log.warn("failed to create WGL context err={}", .{err});
+        return err;
+    };
+
+    return .{
+        .alloc = alloc,
+        .blending = opts.config.blending,
+        .context = context,
     };
 }
 
 pub fn deinit(self: *OpenGL) void {
-    self.egl_display.releaseCurrent();
-    self.egl_context.destroy(self.egl_display) catch {};
+    if (comptime builtin.os.tag == .windows) {
+        self.context.destroy();
+        self.* = undefined;
+        return;
+    }
+
+    self.context.display.releaseCurrent();
+    self.context.context.destroy(self.context.display) catch {};
 
     // Do not destroy the EGL display here as
     // it is shared across the entire process.
@@ -217,7 +250,14 @@ fn prepareContext(getProcAddress: anytype) !void {
 /// function pointers so all subsequent GL work on this thread is valid.
 pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
     _ = surface;
-    try self.egl_display.makeCurrent(null, null, self.egl_context);
+    if (comptime builtin.os.tag == .windows) {
+        try self.context.makeCurrent();
+        try prepareContext(&gl.wgl.getProcAddress);
+        self.context.setSwapInterval(1);
+        return;
+    }
+
+    try self.context.display.makeCurrent(null, null, self.context.context);
     // Load our function pointers for this thread's threadlocal.
     try prepareContext(&gl.egl.getProcAddress);
 }
@@ -226,7 +266,10 @@ pub fn threadEnter(self: *OpenGL, surface: *apprt.Surface) !void {
 /// thread; unbinds the context from this thread so it can be destroyed on
 /// the main thread.
 pub fn threadExit(self: *OpenGL) void {
-    self.egl_display.releaseCurrent();
+    if (comptime builtin.os.tag == .windows)
+        self.context.releaseCurrent()
+    else
+        self.context.display.releaseCurrent();
     gl.glad.unload();
 }
 
@@ -292,7 +335,15 @@ pub fn initTarget(self: *const OpenGL, width: usize, height: usize) !Target {
 ///
 /// This runs on the render thread.
 pub fn present(self: *OpenGL, target: Target) !ExportedFrame {
-    if (target.exportDmabuf(self.egl_display, self.egl_context)) |dmabuf| {
+    if (comptime builtin.os.tag == .windows) {
+        // On Windows we own the window's default framebuffer, so we
+        // present directly rather than exporting the frame.
+        try target.blitToDefaultFramebuffer();
+        try self.context.swapBuffers();
+        return;
+    }
+
+    if (target.exportDmabuf(self.context.display, self.context.context)) |dmabuf| {
         return .{ .dmabuf = dmabuf };
     } else |_| {
         // If DMABUFs fail, then use CPU buffers
@@ -306,7 +357,10 @@ pub fn present(self: *OpenGL, target: Target) !ExportedFrame {
 }
 
 /// A finished frame exported for presentation by the apprt.
-pub const ExportedFrame = union(enum) {
+///
+/// On Windows frames are presented directly by `present`, so
+/// there is nothing to export.
+pub const ExportedFrame = if (builtin.os.tag == .windows) void else union(enum) {
     dmabuf: Dmabuf,
     memory: Memory,
 

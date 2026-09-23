@@ -216,8 +216,14 @@ pub fn add(
     // POSIX C imports that are used throughout Ghostty on a general basis.
     // (note: errno is C stdlib but we just include it here because that's
     // where it's generally included otherwise)
+    // Windows only provides a subset of these headers; code that needs
+    // the rest must be gated on the OS.
     try translate_c.addImportToModule(b, "posix_c", step.root_module, .{
-        .source = .{ .includes = .{ .files = &.{
+        .source = .{ .includes = .{ .files = if (target.result.os.tag == .windows) &.{
+            .{ .path = "errno.h" },
+            .{ .path = "signal.h" },
+            .{ .path = "sys/types.h" },
+        } else &.{
             .{ .path = "errno.h" },
             .{ .path = "pwd.h" },
             .{ .path = "signal.h" },
@@ -653,6 +659,21 @@ pub fn add(
         }
     }
 
+    // On Windows we render with WGL for both libghostty and the exe,
+    // so we always need glad and the system GL/windowing libraries.
+    if (target.result.os.tag == .windows) {
+        if (step.kind == .lib) {
+            step.root_module.addIncludePath(b.path("vendor/glad/include/"));
+            step.root_module.addCSourceFile(.{
+                .file = b.path("vendor/glad/src/gl.c"),
+                .flags = &.{},
+            });
+        }
+        step.root_module.linkSystemLibrary("opengl32", .{});
+        step.root_module.linkSystemLibrary("gdi32", .{});
+        step.root_module.linkSystemLibrary("user32", .{});
+    }
+
     // If we're building an exe then we have additional dependencies.
     if (step.kind != .lib) {
         // We always statically compile glad
@@ -689,7 +710,7 @@ pub fn add(
         }
 
         switch (self.config.app_runtime) {
-            .none => {},
+            .none, .win32 => {},
             .gtk => try self.addGtkNg(step),
         }
     }

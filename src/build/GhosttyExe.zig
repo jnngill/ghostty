@@ -43,6 +43,13 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
     switch (cfg.target.result.os.tag) {
         .windows => {
             exe.subsystem = .Windows;
+
+            // The GUI subsystem makes the CRT look for WinMain, but we
+            // use a standard main. mainCRTStartup calls main while
+            // keeping the GUI subsystem (i.e. no console window).
+            if (cfg.target.result.abi == .msvc) {
+                exe.entry = .{ .symbol_name = "mainCRTStartup" };
+            }
             exe.root_module.addWin32ResourceFile(.{
                 .file = b.path("dist/windows/ghostty.rc"),
             });
