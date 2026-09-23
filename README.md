@@ -1,3 +1,9 @@
+> [!IMPORTANT]
+> **This is an unofficial fork.** The native Windows support on the
+> `windows-native` branch was **written by Claude (an AI model by Anthropic)**
+> and is not affiliated with or endorsed by the Ghostty project. See
+> [WINDOWS.md](WINDOWS.md) for details.
+
 <!-- LOGO -->
 <h1>
 <p align="center">
