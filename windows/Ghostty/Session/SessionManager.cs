@@ -37,9 +37,18 @@ internal sealed class SessionManager
         _windows = windows;
     }
 
+    /// <summary>
+    /// Set for a process launched to run one command (<c>wintty -e ...</c>).
+    /// Such a launch neither restores the saved session nor writes it: its
+    /// single command window is not the user's layout, and persisting it
+    /// would replace the layout they will want back on the next normal start.
+    /// </summary>
+    public bool Suspended { get; set; }
+
     /// <summary>Load and decide whether to restore. Null = launch default window.</summary>
     public SessionState? LoadForRestore()
     {
+        if (Suspended) return null;
         if (!SessionGate.ShouldPersist(_config.WindowSaveState))
         {
             // window-save-state=never: drop any stale session.
@@ -121,7 +130,7 @@ internal sealed class SessionManager
 
     public void RequestPersist()
     {
-        if (!SessionGate.ShouldPersist(_config.WindowSaveState)) return;
+        if (Suspended || !SessionGate.ShouldPersist(_config.WindowSaveState)) return;
         _debounce ??= _dispatcher.CreateTimer();
         _debounce.Interval = TimeSpan.FromMilliseconds(DebounceMs);
         _debounce.IsRepeating = false;
@@ -143,7 +152,7 @@ internal sealed class SessionManager
     /// </summary>
     public void PersistLiveWindows()
     {
-        if (!SessionGate.ShouldPersist(_config.WindowSaveState)) return;
+        if (Suspended || !SessionGate.ShouldPersist(_config.WindowSaveState)) return;
         var state = new SessionState { CleanShutdown = false };
         foreach (var w in _windows())
         {
@@ -169,7 +178,7 @@ internal sealed class SessionManager
     public void FinalizeCleanShutdown(MainWindow? closingFallback)
     {
         _debounce?.Stop();
-        if (!SessionGate.ShouldPersist(_config.WindowSaveState)) return;
+        if (Suspended || !SessionGate.ShouldPersist(_config.WindowSaveState)) return;
 
         var onDisk = _store.Load();
         if (onDisk is { Windows.Count: > 0 })

@@ -1144,6 +1144,13 @@ public partial class App : Application
             Environment.GetCommandLineArgs());
         var honorJumpList = coldLaunch.Action != Ghostty.Core.JumpList.JumpListAction.None;
 
+        // `wintty -e <command>` asks for that command, not for the saved
+        // layout: libghostty runs it in the first surface, and restoring
+        // would put the user's whole session (ssh tabs reconnecting and
+        // all) around it. The session is also left untouched on disk.
+        if (Ghostty.Core.SingleInstance.LaunchCommand.FromArgs(Environment.GetCommandLineArgs()) is not null)
+            _sessionManager.Suspended = true;
+
         var restoreState = honorJumpList ? null : _sessionManager.LoadForRestore();
         if (restoreState is { Windows.Count: > 0 })
         {
