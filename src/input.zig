@@ -26,6 +26,7 @@ pub const KeyEvent = key.KeyEvent;
 pub const KeyRemapSet = key_mods.RemapSet;
 pub const InspectorMode = Binding.Action.InspectorMode;
 pub const Mods = key_mods.Mods;
+pub const consumedModsByText = key_mods.consumedByText;
 pub const MouseAction = mouse.Action;
 pub const MouseButton = mouse.Button;
 pub const MouseButtonState = mouse.ButtonState;

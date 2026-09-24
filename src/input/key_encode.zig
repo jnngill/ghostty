@@ -1369,6 +1369,26 @@ test "kitty: enter, backspace, tab" {
     }
 }
 
+test "kitty: shifted punctuation with consumed shift sends text" {
+    // Shift+; on a US layout with Num Lock on, as the Windows apprt
+    // reports it once consumedModsByText marks shift consumed. Without
+    // the consumed shift this encodes as CSI 59;130u, which programs
+    // such as Neovim read as ';', not ':'.
+    var buf: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    const mods: key.Mods = .{ .shift = true, .num_lock = true };
+    try kitty(&writer, .{
+        .key = .semicolon,
+        .mods = mods,
+        .consumed_mods = @import("key_mods.zig").consumedByText(mods, ":", ';'),
+        .utf8 = ":",
+        .unshifted_codepoint = ';',
+    }, .{
+        .kitty_flags = .{ .disambiguate = true },
+    });
+    try testing.expectEqualStrings(":", writer.buffered());
+}
+
 test "kitty: shift+backspace emits CSI u" {
     // Backspace with shift modifier should emit CSI u sequence, not raw 0x7F.
     // This is important for programs that want to distinguish shift+backspace.

@@ -911,3 +911,66 @@ test "RemapSet: formatEntry right sided" {
     try set.formatEntry(formatterpkg.entryFormatter("key-remap", &buf.writer));
     try testing.expectEqualSlices(u8, "key-remap = left_alt=right_ctrl\n", buf.written());
 }
+
+/// The modifiers Windows used to produce `text` from a key, which the
+/// encoders must not report a second time. For platforms whose
+/// input API reports no consumed modifiers (Win32), derive them the
+/// way the GTK and macOS keymaps report them: a modifier is consumed
+/// when the character differs from the key's unshifted one. Shift
+/// selects the shifted character (`;` -> `:`), and AltGr, which
+/// Windows reports as Ctrl+Alt, selects the third level (`q` -> `@`
+/// on a German layout). Without this, kitty keyboard mode sends
+/// Shift+`;` as `CSI 59;2u` and programs read it as `;`.
+pub fn consumedByText(
+    mods: Mods,
+    text: []const u8,
+    unshifted_codepoint: u32,
+) Mods {
+    // Text is one WM_CHAR, so its first codepoint is the character.
+    const view = std.unicode.Utf8View.init(text) catch return .{};
+    var it = view.iterator();
+    const cp = it.nextCodepoint() orelse return .{};
+    if (unshifted_codepoint == 0 or cp == unshifted_codepoint) return .{};
+
+    var consumed: Mods = .{};
+    consumed.shift = mods.shift;
+    if (mods.ctrl and mods.alt) {
+        consumed.ctrl = true;
+        consumed.alt = true;
+    }
+    return consumed;
+}
+
+test "consumedByText: shifted punctuation consumes shift" {
+    const testing = std.testing;
+    const c = consumedByText(.{ .shift = true, .num_lock = true }, ":", ';');
+    try testing.expect(c.shift);
+    try testing.expect(!c.ctrl and !c.alt and !c.num_lock);
+}
+
+test "consumedByText: shifted letter consumes shift" {
+    const c = consumedByText(.{ .shift = true }, "Z", 'z');
+    try std.testing.expect(c.shift);
+}
+
+test "consumedByText: unchanged text consumes nothing" {
+    // Shift+Space still types a space, so shift stays reportable.
+    const c = consumedByText(.{ .shift = true }, " ", ' ');
+    try std.testing.expectEqual(@as(Mods.Backing, 0), c.int());
+}
+
+test "consumedByText: AltGr consumes ctrl and alt" {
+    const c = consumedByText(.{ .ctrl = true, .alt = true }, "@", 'q');
+    try std.testing.expect(c.ctrl and c.alt and !c.shift);
+}
+
+test "consumedByText: plain ctrl or alt is not consumed" {
+    const c = consumedByText(.{ .alt = true }, "x", 'x');
+    try std.testing.expectEqual(@as(Mods.Backing, 0), c.int());
+}
+
+test "consumedByText: empty or unknown input consumes nothing" {
+    const testing = std.testing;
+    try testing.expectEqual(@as(Mods.Backing, 0), consumedByText(.{ .shift = true }, "", ';').int());
+    try testing.expectEqual(@as(Mods.Backing, 0), consumedByText(.{ .shift = true }, ":", 0).int());
+}

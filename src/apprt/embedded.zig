@@ -3181,6 +3181,12 @@ pub const CAPI = struct {
                     surface.pending_key_text[copy_len] = 0;
 
                     event.text = surface.pending_key_text[0..copy_len :0];
+                    event.consumed_mods = @bitCast(event.consumed_mods.int() |
+                        input.consumedModsByText(
+                            event.mods,
+                            event.text.?,
+                            event.unshifted_codepoint,
+                        ).int());
                 }
 
                 surface.pending_key = null;
