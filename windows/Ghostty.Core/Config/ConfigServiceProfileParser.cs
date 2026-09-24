@@ -79,12 +79,19 @@ public static class ConfigServiceProfileParser
         // on the true-set would leak false-positive warnings.
         var warnings = FilterHiddenOnlyWarnings(parsed.Warnings, parsed.Profiles, hiddenMentions);
 
+        // ssh-hosts-discovery is opt-in: only an explicit true enables it.
+        var sshHostsDiscovery = bool.TryParse(fileValueReader("ssh-hosts-discovery"), out var sshOn) && sshOn;
+        var sshHostsUser = fileValueReader("ssh-hosts-user");
+        if (string.IsNullOrWhiteSpace(sshHostsUser)) sshHostsUser = null;
+
         return new ProfileView(
             ParsedProfiles: parsed.Profiles,
             ProfileOrder: profileOrder,
             DefaultProfileId: defaultId,
             HiddenProfileIds: hidden,
-            ProfileWarnings: warnings);
+            ProfileWarnings: warnings,
+            SshHostsDiscovery: sshHostsDiscovery,
+            SshHostsUser: sshHostsUser?.Trim());
     }
 
     // Warnings for an id which is in the hidden set and absent from parsed
@@ -142,7 +149,7 @@ public static class ConfigServiceProfileParser
 }
 
 /// <summary>
-/// Immutable bundle of the five profile-view values. Matches the
+/// Immutable bundle of the profile-view values. Matches the
 /// member shape of <see cref="IProfileConfigSource"/>.
 /// </summary>
 public sealed record ProfileView(
@@ -150,4 +157,6 @@ public sealed record ProfileView(
     IReadOnlyList<string> ProfileOrder,
     string? DefaultProfileId,
     IReadOnlySet<string> HiddenProfileIds,
-    IReadOnlyList<string> ProfileWarnings);
+    IReadOnlyList<string> ProfileWarnings,
+    bool SshHostsDiscovery = false,
+    string? SshHostsUser = null);
