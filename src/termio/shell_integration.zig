@@ -1470,9 +1470,12 @@ fn setupCmd(
     // would silently turn cmd integration off with nothing to say so.
     if (std.mem.indexOf(u8, body, prompt_mark_sentinel) == null) {
         // `$e` = ESC, terminator ST = `$e\`. OSC 9;9 carries cwd via `$p`.
+        // `redraw=0`: cmd never redraws its prompt on resize, so the
+        // terminal must not clear it expecting a redraw (the default),
+        // or the prompt vanishes on every resize, including the first one.
         const wrapped = try std.fmt.allocPrint(
             alloc_arena,
-            "$e]133;A$e\\$e]9;9;$p$e\\{s}$e]133;B$e\\",
+            "$e]133;A;redraw=0$e\\$e]9;9;$p$e\\{s}$e]133;B$e\\",
             .{body},
         );
         try env.put("PROMPT", wrapped);
