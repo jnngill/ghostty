@@ -594,7 +594,11 @@ pub const Surface = struct {
 
         /// The command to run in the new surface. If this is set then
         /// the "wait-after-command" option is also automatically set to true,
-        /// since this is used for scripting.
+        /// since this is used for scripting. Not on Windows: the WinUI shell
+        /// passes every surface its profile's command (the shell itself),
+        /// so implying a wait would leave every exited shell, and every
+        /// `-e` window, waiting for a key. Windows embedders that want the
+        /// wait set `wait_after_command` explicitly.
         ///
         /// This command always run in a shell (e.g. via `/bin/sh -c`),
         /// despite Ghostty allowing directly executed commands via config.
@@ -716,7 +720,9 @@ pub const Surface = struct {
             const cmd = std.mem.sliceTo(c_command, 0);
             if (cmd.len > 0) {
                 config.command = .{ .shell = cmd };
-                config.@"wait-after-command" = true;
+                if (comptime builtin.os.tag != .windows) {
+                    config.@"wait-after-command" = true;
+                }
             }
         }
 
