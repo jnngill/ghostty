@@ -24,11 +24,12 @@ const WM_APP_CLOSE_SURFACE = c.WM_APP + 10;
 /// Deferred close of tabs. wparam: CloseTabMode, lparam: *Tab.
 const WM_APP_CLOSE_TAB = c.WM_APP + 11;
 
-/// Tab bar height and divider thickness in logical (96 DPI) pixels.
+/// Tab bar height and divider thickness in logical (96 DPI) pixels. The
+/// divider matches the macOS app: 1px visible with a wider hit area.
 const tab_bar_height = 34;
 const tab_max_width = 220;
 const tab_close_size = 20;
-const divider_thickness = 3;
+const divider_thickness = 1;
 
 app: *App,
 hwnd: c.HWND,
@@ -54,6 +55,12 @@ dividers: std.ArrayList(Tab.Divider) = .empty,
 
 /// The divider being dragged, if any.
 drag: ?Tab.Divider = null,
+
+/// Invisible windows covering each divider's grab area. Surfaces sit
+/// right up against the (thin) dividers, so without these the extra grab
+/// area around a divider would be owned by the surfaces. Reused across
+/// layouts; extras are hidden.
+grips: std.ArrayList(c.HWND) = .empty,
 
 /// The font used for the tab bar, recreated when the DPI changes.
 font: ?c.HFONT = null,
@@ -132,6 +139,8 @@ fn teardown(self: *Window, destroy_hwnd: bool) void {
     for (self.tabs.items) |tab| tab.destroy();
     self.tabs.deinit(alloc);
     self.dividers.deinit(alloc);
+    for (self.grips.items) |g| _ = c.DestroyWindow(g);
+    self.grips.deinit(alloc);
     if (self.font) |f| _ = c.DeleteObject(f);
 
     _ = c.SetWindowLongPtrW(self.hwnd, c.GWLP_USERDATA, 0);
@@ -470,8 +479,103 @@ pub fn layout(self: *Window) void {
         &self.dividers,
         alloc,
     );
+    self.layoutGrips();
 
     _ = c.InvalidateRect(self.hwnd, null, 0);
+}
+
+/// The grab area of a divider, which extends a bit past the visible line.
+fn gripRect(self: *const Window, d: Tab.Divider) c.RECT {
+    const slop = self.logical(3);
+    var r = d.rect;
+    switch (d.layout) {
+        .horizontal => {
+            r.left -= slop;
+            r.right += slop;
+        },
+        .vertical => {
+            r.top -= slop;
+            r.bottom += slop;
+        },
+    }
+    return r;
+}
+
+/// Position a grip window over each divider's grab area.
+fn layoutGrips(self: *Window) void {
+    const alloc = self.app.core_app.alloc;
+    for (self.dividers.items, 0..) |d, i| {
+        if (i >= self.grips.items.len) {
+            const g = c.CreateWindowExW(
+                // Layered so the surfaces underneath still show through.
+                c.WS_EX_LAYERED | c.WS_EX_NOACTIVATE,
+                grip_class_name,
+                c.L(""),
+                c.WS_CHILD,
+                0,
+                0,
+                0,
+                0,
+                self.hwnd,
+                null,
+                self.app.hinstance,
+                null,
+            ) orelse return;
+            // Alpha 1 keeps the window effectively invisible while still
+            // receiving mouse input (alpha 0 would not).
+            _ = c.SetLayeredWindowAttributes(g, 0, 1, c.LWA_ALPHA);
+            self.grips.append(alloc, g) catch {
+                _ = c.DestroyWindow(g);
+                return;
+            };
+        }
+
+        const r = self.gripRect(d);
+        _ = c.SetWindowPos(
+            self.grips.items[i],
+            c.HWND_TOP,
+            r.left,
+            r.top,
+            r.right - r.left,
+            r.bottom - r.top,
+            c.SWP_NOACTIVATE | c.SWP_SHOWWINDOW,
+        );
+    }
+
+    for (self.grips.items[@min(self.dividers.items.len, self.grips.items.len)..]) |g| {
+        _ = c.ShowWindow(g, c.SW_HIDE);
+    }
+}
+
+pub const grip_class_name = c.L("GhosttySplitGrip");
+
+/// Window procedure for divider grips: forward mouse input to the parent
+/// window, in its client coordinates, where the divider logic lives.
+pub fn gripWndProc(
+    hwnd: c.HWND,
+    msg: c.UINT,
+    wparam: c.WPARAM,
+    lparam: c.LPARAM,
+) callconv(.winapi) c.LRESULT {
+    switch (msg) {
+        c.WM_LBUTTONDOWN, c.WM_MOUSEMOVE, c.WM_LBUTTONUP => {
+            const parent = c.GetParent(hwnd) orelse return 0;
+            var pt: c.POINT = .{ .x = c.xParam(lparam), .y = c.yParam(lparam) };
+            _ = c.MapWindowPoints(hwnd, parent, @ptrCast(&pt), 1);
+            const lp: c.LPARAM = @as(c.LPARAM, @as(u16, @bitCast(@as(i16, @intCast(pt.x))))) |
+                (@as(c.LPARAM, @as(u16, @bitCast(@as(i16, @intCast(pt.y))))) << 16);
+            return c.SendMessageW(parent, msg, wparam, lp);
+        },
+
+        c.WM_SETCURSOR => {
+            const parent = c.GetParent(hwnd) orelse return 0;
+            return c.SendMessageW(parent, msg, @intFromPtr(parent), lparam);
+        },
+
+        c.WM_ERASEBKGND => return 1,
+
+        else => return c.DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 fn invalidateTabBar(self: *Window) void {
@@ -537,21 +641,8 @@ fn hitTabBar(self: *const Window, pt: c.POINT) ?TabBarHit {
 }
 
 fn hitDivider(self: *const Window, pt: c.POINT) ?Tab.Divider {
-    // Grow the hit area a bit so thin dividers are easy to grab.
-    const slop = self.logical(3);
     for (self.dividers.items) |d| {
-        var r = d.rect;
-        switch (d.layout) {
-            .horizontal => {
-                r.left -= slop;
-                r.right += slop;
-            },
-            .vertical => {
-                r.top -= slop;
-                r.bottom += slop;
-            },
-        }
-        if (c.PtInRect(&r, pt) != 0) return d;
+        if (c.PtInRect(&self.gripRect(d), pt) != 0) return d;
     }
     return null;
 }
@@ -580,10 +671,20 @@ fn colors(self: *const Window) Colors {
     const bg = config.background;
     const fg = config.foreground;
 
+    // Like the macOS app, the default divider is the background darkened
+    // slightly on light backgrounds and more on dark ones.
     const divider = if (config.@"split-divider-color") |d|
         c.rgb(d.r, d.g, d.b)
-    else
-        mix(bg, fg, 0.25);
+    else divider: {
+        const light = bg.toTerminalRGB().perceivedLuminance() > 0.5;
+        const k: f32 = if (light) 1 - 0.08 else 1 - 0.4;
+        const darken = struct {
+            fn f(v: u8, kk: f32) u8 {
+                return @intFromFloat(@round(@as(f32, @floatFromInt(v)) * kk));
+            }
+        }.f;
+        break :divider c.rgb(darken(bg.r, k), darken(bg.g, k), darken(bg.b, k));
+    };
 
     return .{
         .bar = mix(bg, fg, 0.08),
@@ -890,7 +991,15 @@ pub fn isDark(self: *const Window) bool {
         .light => false,
         .dark => true,
         .system => self.app.color_scheme == .dark,
-        .auto, .ghostty => config.background.toTerminalRGB().perceivedLuminance() < 0.5,
+        // "auto" follows the system when the theme has separate light
+        // and dark variants, otherwise the background color.
+        .auto, .ghostty => if (config.theme) |theme|
+            if (!std.mem.eql(u8, theme.light, theme.dark))
+                self.app.color_scheme == .dark
+            else
+                config.background.toTerminalRGB().perceivedLuminance() < 0.5
+        else
+            config.background.toTerminalRGB().perceivedLuminance() < 0.5,
     };
 }
 
@@ -904,10 +1013,6 @@ pub fn syncAppearance(self: *Window) void {
         &dark_bool,
         @sizeOf(c.BOOL),
     );
-    for (self.tabs.items) |tab| {
-        var it = tab.tree.iterator();
-        while (it.next()) |entry| entry.view.syncTheme(dark);
-    }
     self.layout();
 }
 

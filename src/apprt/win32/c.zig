@@ -146,16 +146,6 @@ pub const NOTIFYICONDATAW = extern struct {
     hBalloonIcon: ?HICON = null,
 };
 
-pub const SCROLLINFO = extern struct {
-    cbSize: UINT = @sizeOf(SCROLLINFO),
-    fMask: UINT,
-    nMin: c_int = 0,
-    nMax: c_int = 0,
-    nPage: UINT = 0,
-    nPos: c_int = 0,
-    nTrackPos: c_int = 0,
-};
-
 pub const MINMAXINFO = extern struct {
     ptReserved: POINT,
     ptMaxSize: POINT,
@@ -200,7 +190,6 @@ pub const WM_IME_STARTCOMPOSITION = 0x010D;
 pub const WM_IME_ENDCOMPOSITION = 0x010E;
 pub const WM_IME_COMPOSITION = 0x010F;
 pub const WM_SYSCOMMAND = 0x0112;
-pub const WM_VSCROLL = 0x0115;
 pub const WM_TIMER = 0x0113;
 pub const WM_MOUSEMOVE = 0x0200;
 pub const WM_LBUTTONDOWN = 0x0201;
@@ -225,7 +214,6 @@ pub const WS_VISIBLE = 0x10000000;
 pub const WS_CLIPCHILDREN = 0x02000000;
 pub const WS_CLIPSIBLINGS = 0x04000000;
 pub const WS_POPUP = 0x80000000;
-pub const WS_VSCROLL = 0x00200000;
 pub const WS_EX_NOREDIRECTIONBITMAP = 0x00200000;
 pub const WS_EX_LAYERED = 0x00080000;
 pub const WS_EX_TRANSPARENT = 0x00000020;
@@ -331,22 +319,14 @@ pub const NOTIFYICON_VERSION_4 = 4;
 pub const WM_USER = 0x0400;
 pub const NIN_BALLOONUSERCLICK = WM_USER + 5;
 
-// Scroll bars
-pub const SB_VERT = 1;
-pub const SB_LINEUP = 0;
-pub const SB_LINEDOWN = 1;
-pub const SB_PAGEUP = 2;
-pub const SB_PAGEDOWN = 3;
-pub const SB_THUMBPOSITION = 4;
-pub const SB_THUMBTRACK = 5;
-pub const SB_TOP = 6;
-pub const SB_BOTTOM = 7;
-pub const SIF_RANGE = 0x0001;
-pub const SIF_PAGE = 0x0002;
-pub const SIF_POS = 0x0004;
-pub const SIF_DISABLENOSCROLL = 0x0008;
-pub const SIF_TRACKPOS = 0x0010;
-pub const SIF_ALL = SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS;
+// Menus
+pub const MF_STRING = 0x00000000;
+pub const MF_GRAYED = 0x00000001;
+pub const MF_POPUP = 0x00000010;
+pub const MF_SEPARATOR = 0x00000800;
+pub const TPM_RIGHTBUTTON = 0x0002;
+pub const TPM_NONOTIFY = 0x0080;
+pub const TPM_RETURNCMD = 0x0100;
 
 // GDI
 pub const TRANSPARENT = 1;
@@ -487,11 +467,14 @@ pub extern "user32" fn DrawTextW(HDC, [*]const WCHAR, c_int, *RECT, UINT) callco
 pub extern "user32" fn PtInRect(*const RECT, POINT) callconv(.winapi) BOOL;
 
 pub extern "user32" fn SetLayeredWindowAttributes(HWND, COLORREF, u8, DWORD) callconv(.winapi) BOOL;
-pub extern "user32" fn SetScrollInfo(HWND, c_int, *const SCROLLINFO, BOOL) callconv(.winapi) c_int;
-pub extern "user32" fn GetScrollInfo(HWND, c_int, *SCROLLINFO) callconv(.winapi) BOOL;
-
-// uxtheme
-pub extern "uxtheme" fn SetWindowTheme(HWND, ?[*:0]const WCHAR, ?[*:0]const WCHAR) callconv(.winapi) HRESULT;
+pub extern "user32" fn CreatePopupMenu() callconv(.winapi) ?HMENU;
+pub extern "user32" fn DestroyMenu(HMENU) callconv(.winapi) BOOL;
+pub extern "user32" fn AppendMenuW(HMENU, UINT, usize, ?[*:0]const WCHAR) callconv(.winapi) BOOL;
+pub extern "user32" fn TrackPopupMenu(HMENU, UINT, c_int, c_int, c_int, HWND, ?*const RECT) callconv(.winapi) BOOL;
+pub extern "user32" fn GetParent(HWND) callconv(.winapi) ?HWND;
+pub extern "user32" fn MapWindowPoints(?HWND, ?HWND, *POINT, UINT) callconv(.winapi) c_int;
+pub extern "user32" fn SendMessageW(HWND, UINT, WPARAM, LPARAM) callconv(.winapi) LRESULT;
+pub extern "user32" fn SetWindowRgn(HWND, ?*anyopaque, BOOL) callconv(.winapi) c_int;
 
 // gdi32
 pub extern "gdi32" fn CreateCompatibleDC(?HDC) callconv(.winapi) ?HDC;
@@ -500,6 +483,7 @@ pub extern "gdi32" fn SelectObject(HDC, *anyopaque) callconv(.winapi) ?*anyopaqu
 pub extern "gdi32" fn DeleteObject(*anyopaque) callconv(.winapi) BOOL;
 pub extern "gdi32" fn DeleteDC(HDC) callconv(.winapi) BOOL;
 pub extern "gdi32" fn BitBlt(HDC, c_int, c_int, c_int, c_int, HDC, c_int, c_int, DWORD) callconv(.winapi) BOOL;
+pub extern "gdi32" fn CreateRoundRectRgn(c_int, c_int, c_int, c_int, c_int, c_int) callconv(.winapi) ?*anyopaque;
 pub extern "gdi32" fn CreateSolidBrush(COLORREF) callconv(.winapi) ?HBRUSH;
 pub extern "gdi32" fn SetTextColor(HDC, COLORREF) callconv(.winapi) COLORREF;
 pub extern "gdi32" fn SetBkMode(HDC, c_int) callconv(.winapi) c_int;

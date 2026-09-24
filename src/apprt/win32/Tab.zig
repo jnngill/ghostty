@@ -270,6 +270,7 @@ pub fn updateDimming(self: *Tab) void {
     const dim = self.rects.items.len > 1;
     for (self.rects.items) |r| {
         r.surface.setDimmed(dim and r.surface != self.focused, r.rect);
+        r.surface.setFrame(r.rect);
     }
 }
 

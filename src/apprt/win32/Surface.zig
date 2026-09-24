@@ -14,6 +14,7 @@ const CoreSurface = @import("../../Surface.zig");
 const c = @import("c.zig");
 const key = @import("key.zig");
 const App = @import("App.zig");
+const Scrollbar = @import("Scrollbar.zig");
 const Window = @import("Window.zig");
 
 const log = std.log.scoped(.win32_surface);
@@ -35,6 +36,9 @@ visible: bool = true,
 /// A translucent, click-through overlay used to dim this surface when
 /// it is an unfocused split. Created lazily.
 dim_hwnd: ?c.HWND = null,
+
+/// The overlay scrollbar.
+scrollbar: Scrollbar,
 
 /// Whether core_surface has been initialized.
 core_initialized: bool = false,
@@ -75,8 +79,7 @@ pub fn create(
         0,
         class_name,
         c.L(""),
-        c.WS_CHILD | c.WS_VISIBLE | c.WS_CLIPSIBLINGS |
-            @as(c.DWORD, if (app.config.scrollbar == .system) c.WS_VSCROLL else 0),
+        c.WS_CHILD | c.WS_VISIBLE | c.WS_CLIPSIBLINGS,
         0,
         0,
         rect.right - rect.left,
@@ -104,11 +107,10 @@ pub fn create(
             .height = @intCast(@max(1, client.bottom - client.top)),
         },
         .cursor = c.LoadCursorW(null, c.IDC_IBEAM),
+        .scrollbar = .{ .surface = self },
     };
     _ = c.SetWindowLongPtrW(hwnd, c.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
     errdefer _ = c.SetWindowLongPtrW(hwnd, c.GWLP_USERDATA, 0);
-    self.setScrollbar(.zero);
-    self.syncTheme(window.isDark());
 
     // Add ourselves to the list of surfaces on the app.
     try app.core_app.addSurface(self);
@@ -122,9 +124,11 @@ pub fn create(
     self.core_initialized = true;
 
     if (parent) |p| {
+        // Windows and tabs follow window-inherit-font-size; splits always
+        // inherit, like the GTK app.
         const inherit = switch (context) {
-            .window => app.config.@"window-inherit-font-size",
-            .tab, .split => true,
+            .window, .tab => app.config.@"window-inherit-font-size",
+            .split => true,
         };
         if (inherit) {
             self.core_surface.setFontSize(p.font_size) catch |err| {
@@ -165,6 +169,7 @@ fn destroy(self: *Surface) void {
 
     if (self.title) |v| alloc.free(v);
     if (self.dim_hwnd) |h| _ = c.DestroyWindow(h);
+    self.scrollbar.deinit();
     _ = c.DestroyWindow(self.hwnd);
     alloc.destroy(self);
 }
@@ -334,47 +339,13 @@ pub fn setTitle(self: *Surface, title: [:0]const u8) !void {
 
 /// Update the scrollbar to reflect the terminal's scroll state.
 pub fn setScrollbar(self: *Surface, value: terminal.Scrollbar) void {
-    const info: c.SCROLLINFO = .{
-        .fMask = c.SIF_RANGE | c.SIF_PAGE | c.SIF_POS | c.SIF_DISABLENOSCROLL,
-        .nMin = 0,
-        .nMax = std.math.cast(c_int, value.total -| 1) orelse std.math.maxInt(c_int),
-        .nPage = std.math.cast(c.UINT, value.len) orelse std.math.maxInt(c.UINT),
-        .nPos = std.math.cast(c_int, value.offset) orelse std.math.maxInt(c_int),
-    };
-    _ = c.SetScrollInfo(self.hwnd, c.SB_VERT, &info, 1);
+    self.scrollbar.setState(value);
 }
 
-/// Match our non-client widgets (the scrollbar) to a light or dark theme.
-pub fn syncTheme(self: *Surface, dark: bool) void {
-    _ = c.SetWindowTheme(
-        self.hwnd,
-        if (dark) c.L("DarkMode_Explorer") else c.L("Explorer"),
-        null,
-    );
-}
-
-/// Handle WM_VSCROLL from our scrollbar by scrolling the viewport.
-fn onVScroll(self: *Surface, wparam: c.WPARAM) void {
-    var info: c.SCROLLINFO = .{ .fMask = c.SIF_ALL };
-    if (c.GetScrollInfo(self.hwnd, c.SB_VERT, &info) == 0) return;
-
-    const page: c_int = @intCast(@max(1, info.nPage));
-    const max_pos = @max(0, info.nMax - page + 1);
-    const pos: c_int = switch (c.loword(wparam)) {
-        c.SB_LINEUP => info.nPos - 1,
-        c.SB_LINEDOWN => info.nPos + 1,
-        c.SB_PAGEUP => info.nPos - page,
-        c.SB_PAGEDOWN => info.nPos + page,
-        c.SB_THUMBTRACK, c.SB_THUMBPOSITION => info.nTrackPos,
-        c.SB_TOP => 0,
-        c.SB_BOTTOM => max_pos,
-        else => return,
-    };
-
-    const row: usize = @intCast(std.math.clamp(pos, 0, max_pos));
-    _ = self.core_surface.performBindingAction(.{ .scroll_to_row = row }) catch |err| {
-        log.err("error performing scroll_to_row action err={}", .{err});
-    };
+/// Record the surface's area in the window (after layout), keeping
+/// overlays positioned over it.
+pub fn setFrame(self: *Surface, rect: c.RECT) void {
+    self.scrollbar.setFrame(rect);
 }
 
 /// Show or hide the dim overlay for this surface. `rect` is the
@@ -461,9 +432,10 @@ pub fn dimWndProc(
 pub fn setVisible(self: *Surface, visible: bool) void {
     if (self.visible == visible) return;
     self.visible = visible;
-    if (!visible) if (self.dim_hwnd) |h| {
-        _ = c.ShowWindow(h, c.SW_HIDE);
-    };
+    if (!visible) {
+        if (self.dim_hwnd) |h| _ = c.ShowWindow(h, c.SW_HIDE);
+        self.scrollbar.hide();
+    }
     _ = c.ShowWindow(self.hwnd, if (visible) c.SW_SHOW else c.SW_HIDE);
     self.core_surface.occlusionCallback(visible) catch |err| {
         log.err("error in occlusion callback err={}", .{err});
@@ -638,8 +610,137 @@ fn mouseButton(
         .release => _ = c.ReleaseCapture(),
     }
 
-    _ = self.core_surface.mouseButtonCallback(state, button, mouseMods(wparam)) catch |err| {
+    const consumed = self.core_surface.mouseButtonCallback(
+        state,
+        button,
+        mouseMods(wparam),
+    ) catch |err| err: {
         log.err("error in mouse button callback err={}", .{err});
+        break :err true;
+    };
+
+    // An unconsumed right press means the core selected the word under
+    // the cursor and wants us to show the context menu (it consumes the
+    // press instead for other right-click-action values or when the
+    // terminal is reporting mouse events).
+    if (!consumed and button == .right and state == .press) {
+        _ = c.ReleaseCapture();
+        var pt: c.POINT = undefined;
+        if (c.GetCursorPos(&pt) != 0) self.showContextMenu(pt);
+    }
+}
+
+/// Context menu commands. Zero is reserved for "no selection".
+const MenuCommand = enum(usize) {
+    copy = 1,
+    paste,
+    clear,
+    reset,
+    split_up,
+    split_down,
+    split_left,
+    split_right,
+    close_split,
+    new_tab,
+    close_tab,
+    new_window,
+    close_window,
+    open_config,
+    reload_config,
+
+    fn action(self: MenuCommand) input.Binding.Action {
+        return switch (self) {
+            .copy => .{ .copy_to_clipboard = .mixed },
+            .paste => .paste_from_clipboard,
+            .clear => .clear_screen,
+            .reset => .reset,
+            .split_up => .{ .new_split = .up },
+            .split_down => .{ .new_split = .down },
+            .split_left => .{ .new_split = .left },
+            .split_right => .{ .new_split = .right },
+            .close_split => .close_surface,
+            .new_tab => .new_tab,
+            .close_tab => .{ .close_tab = .this },
+            .new_window => .new_window,
+            .close_window => .close_window,
+            .open_config => .{ .open_config = .os_open },
+            .reload_config => .reload_config,
+        };
+    }
+};
+
+/// Show the terminal context menu at the given screen position and run
+/// the chosen command. Mirrors the GTK context menu.
+fn showContextMenu(self: *Surface, pt: c.POINT) void {
+    const menu = c.CreatePopupMenu() orelse return;
+    defer _ = c.DestroyMenu(menu);
+
+    const Item = struct {
+        fn add(m: c.HMENU, cmd: MenuCommand, label: [*:0]const u16, enabled: bool) void {
+            _ = c.AppendMenuW(
+                m,
+                c.MF_STRING | @as(c.UINT, if (enabled) 0 else c.MF_GRAYED),
+                @intFromEnum(cmd),
+                label,
+            );
+        }
+        fn separator(m: c.HMENU) void {
+            _ = c.AppendMenuW(m, c.MF_SEPARATOR, 0, null);
+        }
+        fn submenu(m: c.HMENU, sub: c.HMENU, label: [*:0]const u16) void {
+            _ = c.AppendMenuW(m, c.MF_POPUP, @intFromPtr(sub), label);
+        }
+    };
+
+    Item.add(menu, .copy, c.L("Copy"), self.core_surface.hasSelection());
+    Item.add(menu, .paste, c.L("Paste"), c.IsClipboardFormatAvailable(c.CF_UNICODETEXT) != 0);
+    Item.separator(menu);
+    Item.add(menu, .clear, c.L("Clear"), true);
+    Item.add(menu, .reset, c.L("Reset"), true);
+    Item.separator(menu);
+
+    // Submenus are owned by the parent menu once appended, so they're
+    // destroyed along with it.
+    if (c.CreatePopupMenu()) |sub| {
+        Item.add(sub, .split_up, c.L("Split Up"), true);
+        Item.add(sub, .split_down, c.L("Split Down"), true);
+        Item.add(sub, .split_left, c.L("Split Left"), true);
+        Item.add(sub, .split_right, c.L("Split Right"), true);
+        Item.separator(sub);
+        Item.add(sub, .close_split, c.L("Close Split"), true);
+        Item.submenu(menu, sub, c.L("Split"));
+    }
+    if (c.CreatePopupMenu()) |sub| {
+        Item.add(sub, .new_tab, c.L("New Tab"), true);
+        Item.add(sub, .close_tab, c.L("Close Tab"), true);
+        Item.submenu(menu, sub, c.L("Tab"));
+    }
+    if (c.CreatePopupMenu()) |sub| {
+        Item.add(sub, .new_window, c.L("New Window"), true);
+        Item.add(sub, .close_window, c.L("Close Window"), true);
+        Item.submenu(menu, sub, c.L("Window"));
+    }
+    Item.separator(menu);
+    if (c.CreatePopupMenu()) |sub| {
+        Item.add(sub, .open_config, c.L("Open Configuration"), true);
+        Item.add(sub, .reload_config, c.L("Reload Configuration"), true);
+        Item.submenu(menu, sub, c.L("Config"));
+    }
+
+    const chosen = c.TrackPopupMenu(
+        menu,
+        c.TPM_RETURNCMD | c.TPM_RIGHTBUTTON | c.TPM_NONOTIFY,
+        pt.x,
+        pt.y,
+        0,
+        self.hwnd,
+        null,
+    );
+    if (chosen <= 0) return;
+    const cmd = std.enums.fromInt(MenuCommand, @as(usize, @intCast(chosen))) orelse return;
+
+    _ = self.core_surface.performBindingAction(cmd.action()) catch |err| {
+        log.err("error performing context menu action err={}", .{err});
     };
 }
 
@@ -658,6 +759,7 @@ fn mouseMove(self: *Surface, wparam: c.WPARAM, lparam: c.LPARAM) void {
     // changes); ignore those so mouse-hide-while-typing works.
     if (pos.x == self.cursor_pos.x and pos.y == self.cursor_pos.y) return;
     self.cursor_pos = pos;
+    self.scrollbar.pointerMoved(pos.x);
 
     self.core_surface.cursorPosCallback(pos, mouseMods(wparam)) catch |err| {
         log.err("error in cursor pos callback err={}", .{err});
@@ -682,6 +784,7 @@ fn mouseWheel(self: *Surface, horizontal: bool, wparam: c.WPARAM) void {
     ) catch |err| {
         log.err("error in scroll callback err={}", .{err});
     };
+    if (!horizontal) self.scrollbar.userScrolled();
 }
 
 fn imeComposition(self: *Surface, lparam: c.LPARAM) void {
@@ -749,8 +852,8 @@ pub fn wndProc(
     const self: *Surface = if (ptr != 0) @ptrFromInt(ptr) else return c.DefWindowProcW(hwnd_, msg, wparam, lparam);
 
     switch (msg) {
-        c.WM_VSCROLL => {
-            self.onVScroll(wparam);
+        c.WM_TIMER => {
+            if (wparam == Scrollbar.hide_timer_id) self.scrollbar.onTimer();
             return 0;
         },
 

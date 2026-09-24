@@ -13,6 +13,7 @@ const input = @import("../../input.zig");
 const internal_os = @import("../../os/main.zig");
 
 const c = @import("c.zig");
+const Scrollbar = @import("Scrollbar.zig");
 const Surface = @import("Surface.zig");
 const Window = @import("Window.zig");
 
@@ -619,6 +620,18 @@ fn registerClasses(hinstance: c.HINSTANCE) !void {
         .hIconSm = icon,
         .hCursor = c.LoadCursorW(null, c.IDC_ARROW),
         .lpszClassName = Window.class_name,
+    }) == 0) return error.Win32Error;
+
+    if (c.RegisterClassExW(&.{
+        .lpfnWndProc = Window.gripWndProc,
+        .hInstance = hinstance,
+        .lpszClassName = Window.grip_class_name,
+    }) == 0) return error.Win32Error;
+
+    if (c.RegisterClassExW(&.{
+        .lpfnWndProc = Scrollbar.wndProc,
+        .hInstance = hinstance,
+        .lpszClassName = Scrollbar.class_name,
     }) == 0) return error.Win32Error;
 
     if (c.RegisterClassExW(&.{
