@@ -1164,6 +1164,13 @@ pub const Surface = struct {
             .y = @floatCast(y_scaled),
         };
 
+        // Composition renderers (DX12 SwapChainPanel) need the scale to
+        // undo the compositor's DIP stretch of the pixel-sized back buffer.
+        self.core_surface.renderer.setTargetScale(
+            self.content_scale.x,
+            self.content_scale.y,
+        );
+
         self.core_surface.contentScaleCallback(self.content_scale) catch |err| {
             log.err("error in content scale callback err={}", .{err});
             return;

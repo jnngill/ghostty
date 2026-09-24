@@ -1140,6 +1140,15 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             }
         }
 
+        /// Notify the graphics API of the surface's content scale. Used
+        /// by composition surfaces whose compositor would otherwise
+        /// stretch a physical-pixel back buffer by that scale.
+        pub fn setTargetScale(self: *Self, x: f32, y: f32) void {
+            if (@hasDecl(GraphicsAPI, "setTargetScale")) {
+                self.api.setTargetScale(x, y);
+            }
+        }
+
         /// Callback called by renderer.Thread when it begins.
         pub fn threadEnter(self: *Self, surface: *apprt.Surface) !void {
             // If our API has to do things on thread enter, let it.

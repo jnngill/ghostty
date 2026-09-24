@@ -232,6 +232,29 @@ desired_size: std.atomic.Value(u64) = .init(0),
 applied_width: u32 = 0,
 applied_height: u32 = 0,
 
+/// SwapChainPanel mode only. The panel maps one swap-chain pixel to one
+/// DIP, so a swap chain sized in physical pixels is magnified by the
+/// composition scale (and cropped) unless the swap chain carries the
+/// inverse scale as its matrix transform. The apprt forwards the content
+/// scale via setTargetScale (packed as two f32 bit patterns, x high, so
+/// both halves load together); beginFrame applies it on the renderer
+/// thread, the only thread that touches the swap chain. applied_scale
+/// is reset to 0 whenever a new swap chain is created so the transform
+/// is reapplied to it.
+panel_mode: bool = false,
+desired_scale: std.atomic.Value(u64) = .init(packScale(1, 1)),
+applied_scale: u64 = 0,
+
+inline fn packScale(x: f32, y: f32) u64 {
+    return (@as(u64, @as(u32, @bitCast(x))) << 32) | @as(u64, @as(u32, @bitCast(y)));
+}
+inline fn unpackScale(packed_scale: u64) struct { x: f32, y: f32 } {
+    return .{
+        .x = @bitCast(@as(u32, @intCast(packed_scale >> 32))),
+        .y = @bitCast(@as(u32, @intCast(packed_scale & 0xFFFFFFFF))),
+    };
+}
+
 /// Width in the high 32 bits so a hexdump reads as WWWWWWWW_HHHHHHHH.
 inline fn packSize(width: u32, height: u32) u64 {
     return (@as(u64, width) << 32) | @as(u64, height);
@@ -292,6 +315,11 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) !DirectX12 {
 
     try result.initGpu(surface, init_width, init_height);
     result.desired_size.store(packSize(init_width, init_height), .monotonic);
+
+    result.panel_mode = surface == .swap_chain_panel;
+    if (opts.rt_surface.getContentScale()) |scale| {
+        result.setTargetScale(scale.x, scale.y);
+    } else |_| {}
 
     return result;
 }
@@ -355,6 +383,8 @@ pub fn initGpu(self: *DirectX12, surface: Surface, width: u32, height: u32) !voi
             return error.SwapChain3QueryFailed;
         }
         self.swap_chain3 = sc3;
+        // A fresh swap chain carries the identity transform.
+        self.applied_scale = 0;
     }
     errdefer if (self.swap_chain3) |sc3| {
         _ = sc3.Release();
@@ -987,6 +1017,38 @@ pub fn setTargetSize(self: *DirectX12, width: u32, height: u32) void {
     self.desired_size.store(packSize(width, height), .monotonic);
 }
 
+/// Called by the apprt when the surface's content scale changes. Like
+/// setTargetSize this runs on the apprt thread, so it only records the
+/// value; beginFrame applies it. Non-positive or NaN scales are ignored.
+pub fn setTargetScale(self: *DirectX12, x: f32, y: f32) void {
+    if (!(x > 0) or !(y > 0)) return;
+    self.desired_scale.store(packScale(x, y), .monotonic);
+}
+
+/// Apply the inverse of the content scale to a SwapChainPanel swap chain
+/// so its physical-pixel back buffer maps 1:1 onto the screen.
+fn applyPanelScale(self: *DirectX12, want: u64) void {
+    const sc3 = self.swap_chain3 orelse return;
+    const scale = unpackScale(want);
+    // IDXGISwapChain3 inherits from IDXGISwapChain2 in COM, so the
+    // v-table prefix is identical (same reasoning as resizeSwapChain).
+    const sc2: *dxgi.IDXGISwapChain2 = @ptrCast(sc3);
+    const matrix: dxgi.DXGI_MATRIX_3X2_F = .{
+        ._11 = 1.0 / scale.x,
+        ._12 = 0,
+        ._21 = 0,
+        ._22 = 1.0 / scale.y,
+        ._31 = 0,
+        ._32 = 0,
+    };
+    const hr = sc2.SetMatrixTransform(&matrix);
+    if (com.FAILED(hr)) {
+        log.err("SetMatrixTransform failed: 0x{x}", .{@as(u32, @bitCast(hr))});
+    }
+    // Record even on failure so a persistent error logs once, not per frame.
+    self.applied_scale = want;
+}
+
 /// Resize the swap chain back buffers in place via IDXGISwapChain1::ResizeBuffers.
 ///
 /// DXGI requires every reference to the existing back buffers (including
@@ -1185,6 +1247,13 @@ pub inline fn beginFrame(
             api.applied_width = want.width;
             api.applied_height = want.height;
         }
+    }
+
+    // SwapChainPanel mode: keep the swap chain's inverse-scale transform
+    // in step with the content scale (see panel_mode).
+    if (api.panel_mode) {
+        const want_scale = api.desired_scale.load(.monotonic);
+        if (want_scale != api.applied_scale) api.applyPanelScale(want_scale);
     }
 
     // Determine which frame slot and render target to use.
