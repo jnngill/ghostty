@@ -793,11 +793,15 @@ pub const DWriteCreateFactoryFn = *const fn (
     *?*anyopaque,
 ) callconv(.winapi) HRESULT;
 
-// Zig 0.16 dropped LoadLibraryW/GetProcAddress from std.os.windows.kernel32,
+// Zig 0.16 dropped LoadLibraryExW/GetProcAddress from std.os.windows.kernel32,
 // so declare them here: this is their only consumer.
-extern "kernel32" fn LoadLibraryW(
+extern "kernel32" fn LoadLibraryExW(
     lpLibFileName: [*:0]const u16,
+    hFile: ?std.os.windows.HANDLE,
+    dwFlags: u32,
 ) callconv(.winapi) ?std.os.windows.HMODULE;
+
+const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x00000800;
 
 extern "kernel32" fn GetProcAddress(
     hModule: std.os.windows.HMODULE,
@@ -805,8 +809,12 @@ extern "kernel32" fn GetProcAddress(
 ) callconv(.winapi) ?std.os.windows.FARPROC;
 
 pub fn loadDWriteCreateFactory() !DWriteCreateFactoryFn {
-    const dwrite_dll = LoadLibraryW(
+    // dwrite.dll is a system DLL: load it from System32 only, never from
+    // the application or working directory.
+    const dwrite_dll = LoadLibraryExW(
         std.unicode.utf8ToUtf16LeStringLiteral("dwrite.dll"),
+        null,
+        LOAD_LIBRARY_SEARCH_SYSTEM32,
     ) orelse return error.DWriteNotAvailable;
 
     const proc = GetProcAddress(
