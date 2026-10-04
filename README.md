@@ -1,3 +1,24 @@
+> [!NOTE]
+> **This is an unofficial fork. It is not affiliated with the Ghostty project.**
+>
+> **Windows build with SSH profiles and SFTP:** [download the latest release](https://github.com/jnngill/ghostty/releases/latest)
+> (installer or portable zip, x64, Windows 10 1809 or later).
+>
+> It is a build of [Wintty](https://github.com/deblasis/wintty) (Ghostty for Windows) plus:
+> - saved SSH connection profiles in the new-tab menu and in Settings
+> - drop files on an ssh pane to upload them to the host's current folder
+> - right-click a file name in an ssh pane to download it
+> - a confirmation before opening terminal links that are not http, https or mailto
+>
+> Source: the [`wintty/ssh-sftp-and-link-safety`](https://github.com/jnngill/ghostty/tree/wintty/ssh-sftp-and-link-safety) branch.
+> The files are not code-signed, so Windows SmartScreen will warn on first run; SHA-256 checksums are on the release page.
+> Developed with AI assistance (Claude Code).
+>
+> A separate experiment, a native Win32 port of Ghostty itself, is on the
+> [`windows-native`](https://github.com/jnngill/ghostty/tree/windows-native) branch.
+
+The rest of this page is the upstream Ghostty README.
+
 <!-- LOGO -->
 <h1>
 <p align="center">
